@@ -1,6 +1,6 @@
 {
   "name": "omp-jev-web",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OMP browser tool that drives one page from one natural-language goal using TypeSafe Jev (System One) decisions instead of the main model.",
   "type": "module",
   "license": "MIT",

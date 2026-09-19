@@ -17,10 +17,13 @@ action with TypeSafe Jev (System One) instead of the main model.
 Use it for self-contained web tasks on a single page: fill a form, set filters, submit, open a
 result. It runs its own Chromium and its own observe/predict/act loop (~5-15s typical), so it does
 not see or disturb tabs owned by the "browser" tool and cannot use your logged-in sessions.
+It can go back to a previous page and it presses Escape by itself when something is in the way, but
+it has no reasoning model behind it: a CAPTCHA, a login, or a multi-tab flow will fail.
 Prefer the "browser" tool when you need login state, multi-tab work, uploads, iframes, shadow DOM,
 canvas, or when you want to inspect the page yourself. Requires TYPESAFE_API_KEY.
-Returns a step-by-step transcript ending in DONE, BLOCKED, budget, or an error. A DONE choice is
-the model's judgement, not proof — verify the outcome when correctness matters.`;
+Returns a step-by-step transcript ending in "done", "blocked", or "budget". On any non-done status
+it returns the page it stopped on and what to try next. A "done" choice is the model's judgement,
+not proof — verify the outcome when correctness matters.`;
 
 export default function jevWeb(omp) {
   if (!process.env.TYPESAFE_API_KEY) {
@@ -59,20 +62,43 @@ export default function jevWeb(omp) {
         log: (line) => lines.push(line),
       });
 
-      const summary = [
-        `status: ${result.status}  (${result.elapsed_ms} ms)`,
-        `final url: ${result.url}`,
-        ...result.steps.map((s) =>
-          `${String(s.step).padStart(2)}. ${s.operation}${s.text ? ` "${s.text}"` : ""} → ${s.action}` +
-          `  p=${(s.probability ?? 0).toFixed(2)} changed=${s.page_changed}`),
-        "",
-        "final visible text:",
-        result.text,
-      ].join("\n");
+      const lines = [`status: ${result.status}  (${result.elapsed_ms} ms)`, `final url: ${result.url}`];
+      if (result.reason) lines.push(`stopped because: ${result.reason}`);
+      for (const s of result.steps) {
+        lines.push(
+          `${String(s.step).padStart(2)}. ${s.escape ? "ESCAPE " : `${s.operation} `}` +
+          `${s.text ? `"${s.text}" ` : ""}${s.refused ? "REFUSED " : ""}→ ${s.action}` +
+          `  ${s.page_changed === false ? "no change" : "changed"}`,
+        );
+      }
+      if (result.status !== "done") {
+        // A failed run is only useful if the caller can decide what to do next.
+        lines.push(
+          "",
+          "this run did not reach the goal. The page it stopped on offered:",
+          ...(result.blocking_page?.controls ?? []).slice(0, 30).map((c) => `  - ${c}`),
+          "",
+          `page text: ${(result.blocking_page?.text ?? "").slice(0, 400)}`,
+          "",
+          "next: re-running with a narrower goal, or handling this part with the `browser` tool " +
+          "(sessions, multi-tab, iframes, uploads), is usually better than retrying the same call.",
+        );
+      } else {
+        lines.push("", "final visible text:", result.text);
+      }
+      const summary = lines.join("\n");
 
       return {
         content: [{ type: "text", text: summary }],
-        details: { status: result.status, elapsed_ms: result.elapsed_ms, url: result.url, title: result.title, steps: result.steps },
+        details: {
+          status: result.status,
+          reason: result.reason,
+          elapsed_ms: result.elapsed_ms,
+          url: result.url,
+          title: result.title,
+          steps: result.steps,
+          blocking_page: result.blocking_page,
+        },
       };
     },
   });

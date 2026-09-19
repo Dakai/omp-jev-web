@@ -384,6 +384,14 @@ export async function readState(page, attempts = 12) {
     try {
       const state = await page.evaluate(SNAPSHOT_JS);
       if (state) {
+        // Back is a first-class action, not a code-only recovery: the policy may choose it when
+        // the page it landed on offers nothing usable. Offered only when there is somewhere to go.
+        try {
+          const nav = await page.call("Page.getNavigationHistory");
+          if (hasPreviousPage(nav)) {
+            state.actions.push({ id: "go_back", kind: "back", label: "Go back to the previous page" });
+          }
+        } catch { /* history unavailable: the action is simply not offered */ }
         state.fingerprint = fingerprint(state);
         return state;
       }
@@ -394,19 +402,70 @@ export async function readState(page, attempts = 12) {
   throw lastErr;
 }
 
+// Generic recoveries the policy cannot ask for, tried in order and each at most once per run:
+// the cheap page-agnostic one first, then the state-level one. Returns what it did, "noop" if it
+// did nothing useful, or "exhausted" when the ladder is spent.
+const ESCAPE_LADDER = ["escape", "back"];
+
+// The initial target starts at about:blank, so "back" would otherwise step into a blank page.
+function hasPreviousPage(nav) {
+  const previous = nav?.entries?.[nav.currentIndex - 1];
+  return Boolean(previous) && !/^about:/.test(previous.url ?? "");
+}
+
+async function runEscape(page, kind) {
+  if (kind === "escape") {
+    for (const type of ["keyDown", "keyUp"]) {
+      await page.call("Input.dispatchKeyEvent", {
+        type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27,
+      });
+    }
+    await sleep(150);
+    return "pressed Escape";
+  }
+  const nav = await page.call("Page.getNavigationHistory");
+  if (!hasPreviousPage(nav)) return null;
+  await page.call("Page.navigateToHistoryEntry", { entryId: nav.entries[nav.currentIndex - 1].id });
+  await sleep(450);
+  return "went back one page";
+}
+
 export async function runGoal({ url, goal, maxSteps = MAX_STEPS, deps = {}, log = () => {} }) {
   if (!url || !goal) throw new Error("url and goal are required");
   const started = Date.now();
   const { browser, close } = await launchBrowser();
   const history = [];
+  const ladder = [...ESCAPE_LADDER];
   let page;
   let status = "ready";
+  let reason = null;
+  let state = null;
   try {
     page = await openPage(browser, url);
-    let state = await readState(page);
+    state = await readState(page);
     log(`obs  ${state.actions.length} controls  ${state.url}`);
     let staleRetries = 0;
     let pendingText = null;
+    let stalled = 0;
+
+    // Deterministic recovery. The policy has no reasoning and will keep choosing the same dead
+    // end; when the run stops making progress, code takes a generic step instead of trusting it
+    // again. Only a recovery that actually changed the page resets the stall counter.
+    const escape = async (why) => {
+      if (!ladder.length) return "exhausted";
+      const did = await runEscape(page, ladder.shift()).catch(() => null);
+      if (!did) return "noop";
+      const before = state;
+      state = await readState(page);
+      const changed = state.fingerprint !== before.fingerprint;
+      history.push({
+        step: history.length + 1, kind: "escape", action: did, escape: true, reason: why,
+        page_changed: changed, url: state.url,
+      });
+      log(`escape  ${did}  (${why})${changed ? "" : " — no change"}`);
+      if (changed) stalled = 0;
+      return changed ? "changed" : "noop";
+    };
 
     while (status === "ready" && history.length < maxSteps) {
       let decision;
@@ -424,9 +483,16 @@ export async function runGoal({ url, goal, maxSteps = MAX_STEPS, deps = {}, log 
       }
       staleRetries = 0;
 
-      if (decision.operation === "DONE" || decision.operation === "BLOCKED") {
-        status = decision.operation === "DONE" ? "done" : "blocked";
-        log(`${decision.operation}  p=${(decision.confidence ?? 0).toFixed(3)} jev=${decision.latency_ms}ms`);
+      if (decision.operation === "DONE") {
+        status = "done";
+        log(`DONE  p=${(decision.confidence ?? 0).toFixed(3)} jev=${decision.latency_ms}ms`);
+        break;
+      }
+      if (decision.operation === "BLOCKED") {
+        log(`BLOCKED  p=${(decision.confidence ?? 0).toFixed(3)} jev=${decision.latency_ms}ms`);
+        if (await escape("the policy reported BLOCKED") !== "exhausted") continue;
+        status = "blocked";
+        reason = "the policy found no supported action and no generic recovery changed the page";
         break;
       }
 
@@ -437,6 +503,9 @@ export async function runGoal({ url, goal, maxSteps = MAX_STEPS, deps = {}, log 
       if (action.kind === "wait") {
         log(`step ${history.length + 1}  WAIT  ${decision.latency_ms}ms`);
         await sleep(100);
+      } else if (action.kind === "back") {
+        const did = await runEscape(page, "back");
+        log(`step ${history.length + 1}  GO_BACK${did ? "" : " — nowhere to go"}`);
       } else {
         if (action.kind === "fill") {
           const context = {
@@ -478,6 +547,12 @@ export async function runGoal({ url, goal, maxSteps = MAX_STEPS, deps = {}, log 
           });
           log(`step ${history.length}  ${decision.operation} → ${action.label}  REFUSED (target moved/covered); re-observing`);
           state = await readState(page);
+          stalled++;
+          if (stalled >= 2 && await escape("a chosen target was refused repeatedly") === "exhausted") {
+            status = "blocked";
+            reason = "the policy kept choosing a target the executor refuses, and no generic recovery changed the page";
+            break;
+          }
           continue;
         }
         if (action.kind === "scroll") {
@@ -505,7 +580,8 @@ export async function runGoal({ url, goal, maxSteps = MAX_STEPS, deps = {}, log 
 
       const before = state;
       state = await readState(page);
-      const record = {
+      const changed = state.fingerprint !== before.fingerprint;
+      history.push({
         step: history.length + 1,
         kind: action.kind,
         operation: decision.operation,
@@ -516,24 +592,42 @@ export async function runGoal({ url, goal, maxSteps = MAX_STEPS, deps = {}, log 
         confidence: decision.confidence,
         jev_latency_ms: decision.latency_ms,
         usage: decision.usage,
-        page_changed: state.fingerprint !== before.fingerprint,
+        page_changed: changed,
         url: state.url,
-      };
-      history.push(record);
+      });
 
-      const repeated = history.slice(-3);
-      if (repeated.length === 3 && repeated.every((h) => h.page_changed === false && h.kind !== "wait")) status = "blocked";
+      stalled = changed || action.kind === "wait" ? 0 : stalled + 1;
+      if (stalled >= 2 && await escape("two cycles without the page changing") === "exhausted") {
+        status = "blocked";
+        reason = "actions stopped changing the page and no generic recovery changed it either";
+        break;
+      }
       if (status === "ready") log(`obs  ${state.actions.length} controls  ${state.url}`);
     }
 
-    if (status === "ready") status = history.length >= maxSteps ? "budget" : "stopped";
+    if (status === "ready") {
+      status = history.length >= maxSteps ? "budget" : "stopped";
+      reason = status === "budget" ? `reached the ${maxSteps}-step budget` : "the loop ended without a terminal decision";
+    }
+    // A terminal failure is only useful if the caller can act on it: hand back what the page
+    // looked like when the run gave up, plus why each decision was refused.
+    const blocking = status === "done" || !state ? undefined : {
+      url: state.url,
+      title: state.title,
+      controls: state.actions.slice(0, 30).map((a) => `${a.kind}${a.role ? ` (${a.role})` : ""}: ${a.label}`),
+      text: (state.text ?? "").slice(0, 600),
+    };
     return {
       status,
+      reason,
       elapsed_ms: Date.now() - started,
       steps: history,
       url: state?.url ?? url,
       title: state?.title ?? "",
       text: (state?.text ?? "").slice(0, 1200),
+      blocking_page: blocking,
+      refusals: history.filter((h) => h.refused).map((h) => ({ action: h.action, reason: h.reason })),
+      escapes: history.filter((h) => h.escape).map((h) => ({ action: h.action, reason: h.reason, page_changed: h.page_changed })),
     };
   } finally {
     try { if (page) await page.close(); } catch {}

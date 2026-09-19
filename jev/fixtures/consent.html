@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Consent overlay fixture</title>
+<style>
+body{font:16px system-ui;margin:40px}
+label{display:block;margin:8px 0}
+#results{display:none;margin-top:24px;border-top:1px solid #ccc;padding-top:12px}
+#consent{position:fixed;inset:0;background:rgba(20,20,20,.85);display:flex;align-items:center;justify-content:center}
+#consent div{background:#fff;padding:28px 32px;border-radius:10px;max-width:420px;text-align:center}
+</style></head>
+<body>
+<div id="consent"><div>
+  <h2>We value your privacy</h2>
+  <p>We use cookies to improve your experience on this site.</p>
+  <button id="accept">Accept all</button>
+  <button id="reject">Reject non-essential</button>
+</div></div>
+
+<h1>Fixture Hotel Search</h1>
+<label>Destination <input id="dest" role="textbox" aria-label="Destination"></label>
+<label>Sort by
+  <select id="sort" aria-label="Sort by">
+    <option value="">Choose…</option>
+    <option value="price">Price</option>
+    <option value="rating">Rating</option>
+    <option value="design">Design</option>
+  </select>
+</label>
+<label><input type="checkbox" id="free" aria-label="Free cancellation"> Free cancellation</label>
+<button id="go">Search</button>
+<div id="results">
+  <h2 id="summary"></h2>
+  <ul>
+    <li><a href="#casa-flora" id="casa">Casa Flora</a> — design hotel</li>
+    <li><a href="#hotel-alfa" id="alfa">Hotel Alfa</a> — budget</li>
+  </ul>
+</div>
+<script>
+for (const id of ['accept','reject']) {
+  document.getElementById(id).addEventListener('click', () => document.getElementById('consent').remove())
+}
+document.getElementById('go').addEventListener('click', () => {
+  const dest = document.getElementById('dest').value.trim()
+  const sort = document.getElementById('sort').value
+  const free = document.getElementById('free').checked
+  const ok = dest.toLowerCase() === 'lisbon' && sort === 'design' && free
+  document.getElementById('summary').textContent =
+    `Search: destination="${dest}" sort="${sort || 'none'}" freeCancellation=${free} -> ${ok ? 'MATCH' : 'NO MATCH'}`
+  document.getElementById('results').style.display = 'block'
+})
+</script>
+</body></html>

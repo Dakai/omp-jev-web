@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Escape-key fixture</title>
+<style>
+body{font:16px system-ui;margin:40px}
+label{display:block;margin:8px 0}
+#modal{position:fixed;inset:0;background:rgba(10,10,10,.92);color:#fff;display:flex;
+  align-items:center;justify-content:center;flex-direction:column;text-align:center}
+</style></head>
+<body>
+<div id="modal"><h2>Lightbox</h2><p>Press Escape to close this lightbox.<br>(It has no buttons.)</p></div>
+
+<h1>Fixture Hotel Search</h1>
+<p>Destination <input id="dest" role="textbox" aria-label="Destination"></p>
+<button id="go">Search</button>
+<div id="out"></div>
+<script>
+addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('modal').remove() })
+document.getElementById('go').addEventListener('click', () => {
+  document.getElementById('out').textContent =
+    'Search: destination="' + document.getElementById('dest').value.trim() + '" -> SUBMITTED'
+})
+</script>
+</body></html>

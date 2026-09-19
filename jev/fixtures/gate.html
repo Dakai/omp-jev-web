@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Gate fixture</title>
+<style>body{font:16px system-ui;margin:40px}button{font:inherit;padding:8px 16px}</style></head>
+<body>
+<h1>Fixture Hotel Search</h1>
+<p>Destination <input id="dest" role="textbox" aria-label="Destination"></p>
+<button id="go">Search</button>
+<div id="gate"></div>
+<script>
+document.getElementById('go').addEventListener('click', () => {
+  // Dead end: a human-verification wall with no operable control.
+  document.querySelector('h1').textContent = 'Verify you are human'
+  document.getElementById('dest').remove()
+  document.getElementById('go').remove()
+  document.getElementById('gate').innerHTML =
+    '<p>Our systems have detected unusual traffic. Complete the verification below to continue.</p>' +
+    '<div id="captcha" style="width:300px;height:80px;border:1px solid #999;background:#f4f4f4;' +
+    'display:flex;align-items:center;justify-content:center">I am not a robot</div>'
+})
+</script>
+</body></html>

@@ -88,18 +88,46 @@ Tool arguments: `url` (required), `goal` (required), `max_steps` (default 30, ca
 
 ## Differences from upstream
 
-Two, both about failing in a bounded way rather than looping:
+The upstream loop has one failure mode that matters on real pages: Jev has no reasoning and no
+recovery, so on anything but a straight line it re-picks the same dead end. These four changes are
+all about failing in a bounded, recoverable way instead.
 
 - **Occluded controls are not offered.** The reference snapshot lists every visible control and
   checks occlusion only when executing, so a policy facing a consent overlay can pick a covered
   target over and over. Here a control that fails a hit test is left out of the action space, so
   the model is never asked for something the executor will refuse.
+- **`GO_BACK` is a first-class action.** The reference action space is
+  `CLICK / TYPE_TEXT / SELECT / SCROLL_UP / SCROLL_DOWN / WAIT / DONE / BLOCKED` — there is no way
+  to undo a decision. Here, whenever there is a real previous page, `GO_BACK` is offered and the
+  policy can choose it like any other operation.
 - **A refused decision counts as a step.** It cost a model call, it is reported to the next
   decision as `refused` with a reason, and it consumes the step budget. An unbounded
   refuse-and-re-observe loop is not possible.
+- **A generic escape ladder runs when the run stops making progress**, or when the policy answers
+  `BLOCKED`: press `Escape`, then go back one page. Each rung is used at most once per run, and
+  only a rung that actually changed the page resets the stall counter. It is deliberately
+  page-agnostic — it does not know what the lightbox is, only that something is in the way.
 
-Measured effect on a page whose form sits under a full-page consent overlay:
-**47.6 s / 27 wasted cycles before, 5.9 s / 0 after** — same goal, same fixture.
+Measured on a page whose form sits under a full-page consent overlay, same goal, same fixture:
+
+| | upstream behaviour | here |
+| --- | --- | --- |
+| consent overlay over the form | 47.6 s, 27 wasted cycles, escaped by luck | **5.9 s, 0 refusals** |
+
+## How it fails
+
+`runGoal` returns a terminal `status` and a `reason`, never a hang:
+
+| status | meaning |
+| --- | --- |
+| `done` | the policy saw the goal satisfied — **its judgement, not proof** |
+| `blocked` | no rung of the escape ladder changed the page either |
+| `budget` | hit the step limit |
+
+On any non-`done` status the result carries a `blocking_page` digest (the URL, the controls that
+were on offer, and the visible text) plus every refusal and escape, and the tool formats it as a
+"here is what the page looked like, here is what to try next" report. That is the whole point of
+wrapping a zero-reasoning policy in a tool: the reasoning layer above it gets to make the call.
 
 ## Limits
 
@@ -108,9 +136,11 @@ Ported as-is from upstream, so it inherits upstream's ceiling:
 - One page, one tab. No iframes, shadow DOM, canvas, file uploads, pop-up tabs, nested scrolling,
   or arbitrary keyboard widgets.
 - Its Chromium starts fresh per call: no cookies, no logged-in sessions, no profile reuse.
-- A step that changes nothing three times in a row stops the run as `BLOCKED`.
-- An action that would have to happen on an element that moved, got covered, or got disabled is
-  refused rather than forced.
+- A real CAPTCHA, an interstitial on another origin, or a flow needing a login is not solvable —
+  the run stops as `blocked` and hands the page back.
+- An action aimed at an element that moved, got covered, or got disabled is refused rather than
+  forced.
+- Two cycles without the page changing trigger the escape ladder; once it is spent, the run stops.
 
 ## Development
 
@@ -118,12 +148,19 @@ Ported as-is from upstream, so it inherits upstream's ceiling:
 git clone https://github.com/Dakai/omp-jev-web
 cd omp-jev-web
 
-bun jev/smoke.mjs          # drives jev/fixture.html offline and asserts the outcome
+bun jev/smoke.mjs          # 5 offline fixtures, ~30s, no network beyond the two APIs
 omp plugin link .          # use the working copy instead of the GitHub install
 ```
 
-The fixture asserts the *real* outcome, not that something moved: `fixture.html` only prints
-`MATCH` when the destination is Lisbon, the sort is Design, *and* free cancellation is checked.
+`smoke.mjs` asserts the *real* outcome of each fixture, not that something moved:
+
+| fixture | asserts |
+| --- | --- |
+| `linear.html` | the form is filled, submitted, and the right result opened, with no refusals |
+| `consent.html` | a full-page overlay is dismissed first and the covered form is never offered |
+| `escape-key.html` | a lightbox with no controls is cleared by the escape ladder |
+| `back-1.html` | `GO_BACK` is chosen and the run returns to the previous page |
+| `gate.html` | a verification wall ends as `blocked` with a reason and a blocking-page digest |
 
 ## Credit
 
