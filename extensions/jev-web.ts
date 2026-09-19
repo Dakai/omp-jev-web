@@ -54,12 +54,12 @@ export default function jevWeb(omp) {
       if (typeof url !== "string" || !url.trim()) throw new Error("jev_web: url is required");
       if (typeof goal !== "string" || !goal.trim()) throw new Error("jev_web: goal is required");
 
-      const lines = [];
+      const progress = [];
       const result = await runGoal({
         url: url.trim(),
         goal: goal.trim(),
         maxSteps: Number.isFinite(maxSteps) ? Math.max(1, Math.min(60, Number(maxSteps))) : undefined,
-        log: (line) => lines.push(line),
+        log: (line) => progress.push(line),
       });
 
       const lines = [`status: ${result.status}  (${result.elapsed_ms} ms)`, `final url: ${result.url}`];
@@ -82,6 +82,9 @@ export default function jevWeb(omp) {
           "",
           "next: re-running with a narrower goal, or handling this part with the `browser` tool " +
           "(sessions, multi-tab, iframes, uploads), is usually better than retrying the same call.",
+          "",
+          "trace:",
+          ...progress.slice(-15).map((l) => `  ${l}`),
         );
       } else {
         lines.push("", "final visible text:", result.text);

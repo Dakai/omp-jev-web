@@ -6,6 +6,14 @@
 
 import { runGoal } from "./engine.mjs";
 
+// The extension wrapper is a separate artifact from the engine: loading it here catches a syntax
+// or duplicate-declaration error before OMP's own validator refuses the install.
+const extension = await import("../extensions/jev-web.ts");
+if (typeof extension.default !== "function") {
+  console.error("FAIL: extensions/jev-web.ts does not export a default function");
+  process.exit(1);
+}
+
 const fx = (name) => new URL(`fixtures/${name}`, import.meta.url).href;
 const HOTEL = "Search for Lisbon, set sort to Design, enable Free cancellation, and open the Casa Flora hotel.";
 
