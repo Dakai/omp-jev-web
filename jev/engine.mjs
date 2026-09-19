@@ -262,7 +262,10 @@ export async function choose(state, goal, history, deps = {}) {
     state: {
       page: { url: state.url, title: state.title, text: state.text },
       elements,
-      recent_actions: history.slice(-10).map((h) => ({ action: h.action, kind: h.kind, text: h.text, page_changed: h.page_changed })),
+      recent_actions: history.slice(-10).map((h) => ({
+        action: h.action, kind: h.kind, text: h.text, page_changed: h.page_changed,
+        ...(h.refused ? { refused: true, reason: h.reason } : {}),
+      })),
     },
     questions,
   };
@@ -454,7 +457,26 @@ export async function runGoal({ url, goal, maxSteps = MAX_STEPS, deps = {}, log 
 
         const point = await page.evaluate(GUARD_JS(action));
         if (point === null) {
-          log(`step ${history.length + 1}  ${decision.operation} → ${action.label}  STALE (target moved/covered); re-observing`);
+          // A refused decision is still a decision cycle: it costs a model call and must be both
+          // visible to the next one and counted against the budget, or the loop can spin forever
+          // re-picking a target the executor will never accept.
+          history.push({
+            step: history.length + 1,
+            kind: action.kind,
+            operation: decision.operation,
+            action: action.label,
+            target: decision.target,
+            text: null,
+            refused: true,
+            reason: "the chosen target moved or is covered; nothing was sent to the page",
+            probability: decision.probabilities[decision.choice],
+            confidence: decision.confidence,
+            jev_latency_ms: decision.latency_ms,
+            usage: decision.usage,
+            page_changed: false,
+            url: state.url,
+          });
+          log(`step ${history.length}  ${decision.operation} → ${action.label}  REFUSED (target moved/covered); re-observing`);
           state = await readState(page);
           continue;
         }

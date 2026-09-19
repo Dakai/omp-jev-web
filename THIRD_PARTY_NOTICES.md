@@ -6,7 +6,7 @@ MIT License. The files below are derived from it:
 
 | File here | Origin upstream |
 | --- | --- |
-| `jev/snapshot.js` | `jev_ultrafast/snapshot.js` — copied essentially verbatim |
+| `jev/snapshot.js` | `jev_ultrafast/snapshot.js` — copied, with one addition: controls that fail a hit test are not offered (upstream checks occlusion at execution time only) |
 | `jev/engine.mjs` | `jev_ultrafast/agent.py`, `browser.py`, `model.py`, `questions.py` — the action space, the speculative target heads, the response validator, the execution guard, and the policy prompts are ports of these |
 
 Upstream license:

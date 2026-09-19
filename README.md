@@ -86,6 +86,21 @@ proof — verify when correctness matters.
 
 Tool arguments: `url` (required), `goal` (required), `max_steps` (default 30, capped at 60).
 
+## Differences from upstream
+
+Two, both about failing in a bounded way rather than looping:
+
+- **Occluded controls are not offered.** The reference snapshot lists every visible control and
+  checks occlusion only when executing, so a policy facing a consent overlay can pick a covered
+  target over and over. Here a control that fails a hit test is left out of the action space, so
+  the model is never asked for something the executor will refuse.
+- **A refused decision counts as a step.** It cost a model call, it is reported to the next
+  decision as `refused` with a reason, and it consumes the step budget. An unbounded
+  refuse-and-re-observe loop is not possible.
+
+Measured effect on a page whose form sits under a full-page consent overlay:
+**47.6 s / 27 wasted cycles before, 5.9 s / 0 after** — same goal, same fixture.
+
 ## Limits
 
 Ported as-is from upstream, so it inherits upstream's ceiling:
